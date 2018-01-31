@@ -485,15 +485,15 @@ int main(int argc, char* argv[])
 			read_text_file(".\\shaders\\gbuffer.frag"));
 
 		/* uniforms */
-		constexpr GLint uniform_proj = 0;
-		constexpr GLint	uniform_cam_pos = 0;
-		constexpr GLint uniform_cam_dir = 0;
-		constexpr GLint uniform_view = 1;
-		constexpr GLint uniform_fov = 1;
-		constexpr GLint uniform_aspect = 2;
-		constexpr GLint uniform_modl = 2;
-		constexpr GLint uniform_lght = 3;
-		constexpr GLint uniform_uvs_diff = 3;
+		constexpr auto uniform_proj = 0;
+		constexpr auto uniform_cam_pos = 0;
+		constexpr auto uniform_cam_dir = 0;
+		constexpr auto uniform_view = 1;
+		constexpr auto uniform_fov = 1;
+		constexpr auto uniform_aspect = 2;
+		constexpr auto uniform_modl = 2;
+		constexpr auto uniform_lght = 3;
+		constexpr auto uniform_uvs_diff = 3;
 
 		constexpr auto fov = glm::radians(60.0f);
 		auto const camera_proj = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
@@ -538,7 +538,8 @@ int main(int argc, char* argv[])
 			set_uniform(vert_shader_g, uniform_view, camera_view);
 
 			/* g-buffer pass */
-			static GLint const viewport_width = 1280, viewport_height = 720;
+			static auto const viewport_width = 1280;
+			static auto const viewport_height = 720;
 			glViewport(0, 0, viewport_width, viewport_height);
 
 			auto const depth_clear_val = 1.0f;
