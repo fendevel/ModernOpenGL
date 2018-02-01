@@ -91,7 +91,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="deps\glad\src\glad.c" />
-    <ClCompile Include="source.cpp" />
+    <ClCompile Include="src\source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="deps\SDL2-2.0.5\include\begin_code.h" />
