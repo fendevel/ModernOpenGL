@@ -4,10 +4,12 @@
 #include <iostream>
 #include <cstdint>
 #include <fstream>
+#include <sstream>
 #include <tuple>
 #include <array>
 #include <random>
 #include <vector>
+#include <experimental/filesystem>
 
 #include <SDL.h>
 #include <glad\glad.h>
@@ -17,19 +19,28 @@
 #include <glm\gtx\transform.hpp>
 #include <glm\gtc\matrix_transform.hpp>
 
+namespace fs = std::experimental::filesystem;
+
 extern "C" { _declspec(dllexport) unsigned int NvOptimusEnablement = 0x00000001; }
 
 inline std::string read_text_file(std::string_view filepath)
 {
+	if (!fs::exists(filepath.data()))
+	{
+		std::ostringstream message;
+		message << "file " << filepath.data() << " does not exist.";
+		throw fs::filesystem_error(message.str());
+	}
 	std::ifstream file(filepath.data());
-	return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
 struct vertex_t
 {
-	glm::vec3 pos, col, nrm;
-	glm::vec2 uvs;
-	vertex_t(glm::vec3 const& pos, glm::vec3 const& col, glm::vec3 const& nrm, glm::vec2 const& uvs) : pos(pos), col(col), nrm(nrm), uvs(uvs) {}
+	glm::vec3 position, color, normal;
+	glm::vec2 texcoord;
+	vertex_t(glm::vec3 const& position, glm::vec3 const& color, glm::vec3 const& normal, glm::vec2 const& texcoord)
+		: position(position), color(color), normal(normal), texcoord(texcoord) {}
 };
 
 struct attrib_format_t
@@ -98,11 +109,11 @@ std::tuple<GLuint, GLuint, GLuint> create_geometry(std::vector<T> const& vertice
 
 std::tuple<GLuint, GLuint, GLuint> create_shader(std::string_view vert_source, std::string_view frag_source)
 {
-	auto const v_ptr = vert_source.data(), f_ptr = frag_source.data();
-	GLuint
-		pipeline = 0,
-		vert = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &v_ptr),
-		frag = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &f_ptr);
+	auto const v_ptr = vert_source.data();
+	auto const f_ptr = frag_source.data();
+	GLuint pipeline = 0;
+	GLuint vert = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &v_ptr);
+	GLuint frag = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &f_ptr);
 
 	glCreateProgramPipelines(1, &pipeline);
 	glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vert);
@@ -133,7 +144,9 @@ GLuint create_texture_2d(GLenum internal_format, GLenum format, GLsizei width, G
 	glTextureParameteri(tex, GL_TEXTURE_WRAP_R, repeat);
 
 	if (data)
+	{
 		glTextureSubImage2D(tex, 0, 0, 0, width, height, format, GL_UNSIGNED_BYTE, data);
+	}
 
 	return tex;
 }
@@ -146,8 +159,12 @@ GLuint create_texture_cube(GLenum internal_format, GLenum format, GLsizei width,
 	glTextureStorage2D(tex, 1, internal_format, width, height);
 
 	for (GLint i = 0; i < 6; ++i)
+	{
 		if (data[i])
+		{
 			glTextureSubImage3D(tex, 0, 0, 0, i, width, height, 1, format, GL_UNSIGNED_BYTE, data[i]);
+		}
+	}
 
 	return tex;
 }
@@ -156,6 +173,12 @@ using stb_comp_t = decltype(STBI_default);
 GLuint create_texture_2d_from_file(std::string_view filepath, stb_comp_t comp = STBI_rgb_alpha)
 {
 	int x, y, c;
+	if (!fs::exists(filepath.data()))
+	{
+		std::ostringstream message;
+		message << "file " << filepath.data() << " does not exist.";
+		throw std::runtime_error(message.str());
+	}
 	const auto data = stbi_load(filepath.data(), &x, &y, &c, comp);
 
 	auto const[in, ex] = [comp]() {
@@ -190,7 +213,7 @@ GLuint create_texture_cube_from_file(std::array<std::string_view, 6> const& file
 		}
 	}();
 
-	for (GLint i = 0; i < 6; i++)
+	for (auto i = 0; i < 6; i++)
 	{
 		faces[i] = stbi_load(filepath[i].data(), &x, &y, &c, comp);
 	}
@@ -209,7 +232,7 @@ GLuint create_framebuffer(std::vector<GLuint> const& cols, GLuint depth = GL_NON
 	GLuint fbo = 0;
 	glCreateFramebuffers(1, &fbo);
 
-	for (int i = 0; i < cols.size(); i++)
+	for (auto i = 0; i < cols.size(); i++)
 	{
 		glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0 + i, cols[i], 0);
 	}
@@ -257,8 +280,6 @@ inline void set_uniform(GLuint shader, GLint location, T const& value)
 	else throw std::runtime_error("unsupported type");
 }
 
-inline glm::vec3 orbit_axis(float angle, glm::vec3 const& axis, glm::vec3 const& spread) { return glm::angleAxis(angle, axis) * spread; }
-
 inline void delete_shader(GLuint pr, GLuint vs, GLuint fs)
 {
 	glDeleteProgramPipelines(1, &pr);
@@ -277,6 +298,7 @@ inline void delete_items(glDeleterFunc deleter, std::initializer_list<GLuint> it
 	}
 }
 
+inline glm::vec3 orbit_axis(float angle, glm::vec3 const& axis, glm::vec3 const& spread) { return glm::angleAxis(angle, axis) * spread; }
 inline float lerp(float a, float b, float f) { return a + f * (b - a); }
 
 /*
@@ -290,12 +312,12 @@ std::vector<glm::vec3> calc_tangents(std::vector<vertex_t> const& vertices, std:
 			v = q * 4,
 			i = q * 6;
 		glm::vec3
-			edge0 = vertices[indices[i + 1]].pos - vertices[indices[i + 0]].pos, edge1 = vertices[indices[i + 2]].pos - vertices[indices[0]].pos,
-			edge2 = vertices[indices[i + 4]].pos - vertices[indices[i + 3]].pos, edge3 = vertices[indices[i + 5]].pos - vertices[indices[3]].pos;
+			edge0 = vertices[indices[i + 1]].position - vertices[indices[i + 0]].position, edge1 = vertices[indices[i + 2]].position - vertices[indices[0]].position,
+			edge2 = vertices[indices[i + 4]].position - vertices[indices[i + 3]].position, edge3 = vertices[indices[i + 5]].position - vertices[indices[3]].position;
 
 		glm::vec2
-			delta_uv0 = vertices[indices[i + 1]].uvs - vertices[indices[i + 0]].uvs, delta_uv1 = vertices[indices[i + 2]].uvs - vertices[indices[i + 0]].uvs,
-			delta_uv2 = vertices[indices[i + 4]].uvs - vertices[indices[i + 3]].uvs, delta_uv3 = vertices[indices[i + 5]].uvs - vertices[indices[i + 3]].uvs;
+			delta_uv0 = vertices[indices[i + 1]].texcoord - vertices[indices[i + 0]].texcoord, delta_uv1 = vertices[indices[i + 2]].texcoord - vertices[indices[i + 0]].texcoord,
+			delta_uv2 = vertices[indices[i + 4]].texcoord - vertices[indices[i + 3]].texcoord, delta_uv3 = vertices[indices[i + 5]].texcoord - vertices[indices[i + 3]].texcoord;
 
 		float const
 			f0 = 1.0f / (delta_uv0.x * delta_uv1.y - delta_uv1.x * delta_uv0.y),
@@ -363,7 +385,8 @@ std::vector<glm::vec3> generate_ssao_noise()
 
 int main(int argc, char* argv[])
 {
-	constexpr int window_width = 1280, window_height = 720;
+	constexpr auto window_width = 1280;
+	constexpr auto window_height = 720;
 	const auto window = SDL_CreateWindow("\0", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_width, window_height, SDL_WINDOW_OPENGL);
 	const auto gl_context = SDL_GL_CreateContext(window);
 	auto ev = SDL_Event();
@@ -371,277 +394,289 @@ int main(int argc, char* argv[])
 	auto key_count = 0;
 	const auto key_state = SDL_GetKeyboardState(&key_count);
 
-	std::array<bool, 512> key, key_pressed, key_released;
+	std::array<bool, 512> key;
+	std::array<bool, 512> key_pressed;
+	std::array<bool, 512> key_released;
 
-	auto const[screen_width, screen_height] = []() {
-		SDL_DisplayMode display_mode;
-		SDL_GetCurrentDisplayMode(0, &display_mode);
-		return std::pair<int, int>(display_mode.w, display_mode.h);
+	auto const[screen_width, screen_height] = []()
+	{
+		//SDL_DisplayMode display_mode;
+		//SDL_GetCurrentDisplayMode(0, &display_mode);
+		//return std::pair<int, int>(display_mode.w, display_mode.h);
+		return std::pair<int, int>(320, 200);
 	}();
 
-	if (auto const glad = gladLoadGL())
+	auto const glad = gladLoadGL();
+
+	if (!glad)
 	{
-		std::clog << glGetString(GL_VERSION) << '\n';
+		throw std::runtime_error("failed to load gl");
+	}
 
-		glEnable(GL_CULL_FACE);
-		glEnable(GL_DEPTH_TEST);
-		glEnable(GL_PROGRAM_POINT_SIZE);
+	std::clog << glGetString(GL_VERSION) << '\n';
 
-		std::vector<vertex_t> const
-			vertices_cube = {
-			vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(1.0f, 1.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(0.0f, 1.0f)),
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_PROGRAM_POINT_SIZE);
 
-			vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
-			vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
+	std::vector<vertex_t> const vertices_cube =
+	{
+		vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f,-1.0f), glm::vec2(0.0f, 1.0f)),
 
-			vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 1.0f)),
-			vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
 
-			vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f, 1.0f)),
+		vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(1.0f, 1.0f)),
 
-			vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
-			vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
+		vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
 
-			vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
-			vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
-		},
-		vertices_quad = {
-			vertex_t(glm::vec3(-0.5f, 0.0f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.0f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
-			vertex_t(glm::vec3(0.5f, 0.0f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
-			vertex_t(glm::vec3(-0.5f, 0.0f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
-		};
+		vertex_t(glm::vec3(-0.5f, 0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(-0.5f, 0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
 
-		std::vector<uint8_t> const
-			indices_cube = {
-			0,   1,  2,  2,  3,  0,
-			4,   5,  6,  6,  7,  4,
-			8,   9, 10, 10, 11,  8,
+		vertex_t(glm::vec3(0.5f,-0.5f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(-0.5f,-0.5f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
+		vertex_t(glm::vec3(0.5f,-0.5f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f,-1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
+	};
 
-			12, 13, 14, 14, 15, 12,
-			16, 17, 18, 18, 19, 16,
-			20, 21, 22, 22, 23, 20,
-		},
-		indices_quad = {
-			0,   1,  2,  2,  3,  0,
-		};
+	std::vector<vertex_t> const	vertices_quad =
+	{
+		vertex_t(glm::vec3(-0.5f, 0.0f, 0.5f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.0f, 0.5f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 0.0f)),
+		vertex_t(glm::vec3(0.5f, 0.0f,-0.5f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(1.0f, 1.0f)),
+		vertex_t(glm::vec3(-0.5f, 0.0f,-0.5f), glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 1.0f)),
+	};
 
-		auto const cub_dif = create_texture_2d_from_file(".\\textures\\T_Default_D.png", STBI_rgb);
-		auto const cub_spc = create_texture_2d_from_file(".\\textures\\T_Default_S.png", STBI_grey);
-		auto const cub_nrm = create_texture_2d_from_file(".\\textures\\T_Default_N.png", STBI_rgb);
-		auto const skybox = create_texture_cube_from_file({
-				".\\textures\\TC_SkyRed_Xn.png",
-				".\\textures\\TC_SkyRed_Xp.png",
-				".\\textures\\TC_SkyRed_Yn.png",
-				".\\textures\\TC_SkyRed_Yp.png",
-				".\\textures\\TC_SkyRed_Zn.png",
-				".\\textures\\TC_SkyRed_Zp.png"
-			});
+	std::vector<uint8_t> const indices_cube =
+	{
+		0,   1,  2,  2,  3,  0,
+		4,   5,  6,  6,  7,  4,
+		8,   9, 10, 10, 11,  8,
 
-		/* framebuffer textures */
-		auto const col_tex = create_texture_2d(GL_RGB8, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
-		auto const pos_tex = create_texture_2d(GL_RGB16F, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
-		auto const nrm_tex = create_texture_2d(GL_RGB16F, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
-		auto const alb_tex = create_texture_2d(GL_RGBA16F, GL_RGBA, screen_width, screen_height, nullptr, GL_NEAREST);
-		auto const dep_tex = create_texture_2d(GL_DEPTH_COMPONENT32, GL_DEPTH, screen_width, screen_height, nullptr, GL_NEAREST);
+		12, 13, 14, 14, 15, 12,
+		16, 17, 18, 18, 19, 16,
+		20, 21, 22, 22, 23, 20,
+	};
 
-		auto const buffer_g = create_framebuffer({ pos_tex, nrm_tex, alb_tex }, dep_tex);
-		auto const final_col_fb = create_framebuffer({ col_tex });
+	std::vector<uint8_t> const indices_quad =
+	{
+		0,   1,  2,  2,  3,  0,
+	};
 
-		/* vertex formatting information */
-		auto const vertex_format = {
-			create_attrib_format<glm::vec3>(0, offsetof(vertex_t, pos)),
-			create_attrib_format<glm::vec3>(1, offsetof(vertex_t, col)),
-			create_attrib_format<glm::vec3>(2, offsetof(vertex_t, nrm)),
-			create_attrib_format<glm::vec2>(3, offsetof(vertex_t, uvs))
-		};
+	auto const texture_cube_diffuse = create_texture_2d_from_file(".\\textures\\T_Default_D.png", STBI_rgb);
+	auto const texture_cube_specular = create_texture_2d_from_file(".\\textures\\T_Default_S.png", STBI_grey);
+	auto const texture_cube_normal = create_texture_2d_from_file(".\\textures\\T_Default_N.png", STBI_rgb);
+	auto const texture_skybox = create_texture_cube_from_file({
+			".\\textures\\TC_SkyRed_Xn.png",
+			".\\textures\\TC_SkyRed_Xp.png",
+			".\\textures\\TC_SkyRed_Yn.png",
+			".\\textures\\TC_SkyRed_Yp.png",
+			".\\textures\\TC_SkyRed_Zn.png",
+			".\\textures\\TC_SkyRed_Zp.png"
+		});
 
-		/* geometry buffers */
-		auto const vao_empty = [] { GLuint name = 0; glCreateVertexArrays(1, &name); return name; }();
-		auto const[vao_cube, vbo_cube, ibo_cube] = create_geometry(vertices_cube, indices_cube, vertex_format);
-		auto const[vao_quad, vbo_quad, ibo_quad] = create_geometry(vertices_quad, indices_quad, vertex_format);
+	/* framebuffer textures */
+	auto const texture_gbuffer_color = create_texture_2d(GL_RGB8, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_gbuffer_position = create_texture_2d(GL_RGB16F, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_gbuffer_normal = create_texture_2d(GL_RGB16F, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_gbuffer_albedo = create_texture_2d(GL_RGBA16F, GL_RGBA, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_gbuffer_depth = create_texture_2d(GL_DEPTH_COMPONENT32, GL_DEPTH, screen_width, screen_height, nullptr, GL_NEAREST);
 
-		/* shaders */
-		auto const[pr, vert_shader, frag_shader] = create_shader(
-			read_text_file(".\\shaders\\main.vert"),
-			read_text_file(".\\shaders\\main.frag"));
+	auto const fb_gbuffer = create_framebuffer({ texture_gbuffer_position, texture_gbuffer_normal, texture_gbuffer_albedo }, texture_gbuffer_depth);
+	auto const fb_finalcolor = create_framebuffer({ texture_gbuffer_color });
 
-		auto const[pr_g, vert_shader_g, frag_shader_g] = create_shader(
-			read_text_file(".\\shaders\\gbuffer.vert"),
-			read_text_file(".\\shaders\\gbuffer.frag"));
+	/* vertex formatting information */
+	auto const vertex_format =
+	{
+		create_attrib_format<glm::vec3>(0, offsetof(vertex_t, position)),
+		create_attrib_format<glm::vec3>(1, offsetof(vertex_t, color)),
+		create_attrib_format<glm::vec3>(2, offsetof(vertex_t, normal)),
+		create_attrib_format<glm::vec2>(3, offsetof(vertex_t, texcoord))
+	};
 
-		/* uniforms */
-		constexpr auto uniform_proj = 0;
-		constexpr auto uniform_cam_pos = 0;
-		constexpr auto uniform_cam_dir = 0;
-		constexpr auto uniform_view = 1;
-		constexpr auto uniform_fov = 1;
-		constexpr auto uniform_aspect = 2;
-		constexpr auto uniform_modl = 2;
-		constexpr auto uniform_lght = 3;
-		constexpr auto uniform_uvs_diff = 3;
+	/* geometry buffers */
+	auto const vao_empty = [] { GLuint name = 0; glCreateVertexArrays(1, &name); return name; }();
+	auto const[vao_cube, vbo_cube, ibo_cube] = create_geometry(vertices_cube, indices_cube, vertex_format);
+	auto const[vao_quad, vbo_quad, ibo_quad] = create_geometry(vertices_quad, indices_quad, vertex_format);
 
-		constexpr auto fov = glm::radians(60.0f);
-		auto const camera_proj = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
-		set_uniform(vert_shader_g, uniform_proj, camera_proj);
+	/* shaders */
+	auto const[pr, vert_shader, frag_shader] = create_shader(
+		read_text_file(".\\shaders\\main.vert"),
+		read_text_file(".\\shaders\\main.frag"));
 
-		while (ev.type != SDL_QUIT)
+	auto const[pr_g, vert_shader_g, frag_shader_g] = create_shader(
+		read_text_file(".\\shaders\\gbuffer.vert"),
+		read_text_file(".\\shaders\\gbuffer.frag"));
+
+	/* uniforms */
+	constexpr auto uniform_proj = 0;
+	constexpr auto uniform_cam_pos = 0;
+	constexpr auto uniform_cam_dir = 0;
+	constexpr auto uniform_view = 1;
+	constexpr auto uniform_fov = 1;
+	constexpr auto uniform_aspect = 2;
+	constexpr auto uniform_modl = 2;
+	constexpr auto uniform_lght = 3;
+	constexpr auto uniform_uvs_diff = 3;
+
+	constexpr auto fov = glm::radians(60.0f);
+	auto const camera_projection = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
+	set_uniform(vert_shader_g, uniform_proj, camera_projection);
+
+	while (ev.type != SDL_QUIT)
+	{
+		if (SDL_PollEvent(&ev))
 		{
-			if (SDL_PollEvent(&ev))
+			for (int i = 0; i < key_count; i++)
 			{
-				for (int i = 0; i < key_count; i++)
-				{
-					key_pressed[i] = !key[i] && key_state[i];
-					key_released[i] = key[i] && !key_state[i];
-					key[i] = bool(key_state[i]);
-				}
+				key_pressed[i] = !key[i] && key_state[i];
+				key_released[i] = key[i] && !key_state[i];
+				key[i] = bool(key_state[i]);
 			}
-			static auto rot_x = 0.0f;
-			static auto rot_y = 0.0f;
-			static glm::vec3 camera_pos = glm::vec3(0.0f, 0.0f, -7.0f);
-			static glm::quat camera_rot = glm::vec3(0.0f, 0.0f, 0.0f);
-			auto const cam_forward = camera_rot * glm::vec3(0.0f, 0.0f, 1.0f);
-			auto const cam_up = camera_rot * glm::vec3(0.0f, 1.0f, 0.0f);
-			auto const	cam_right = camera_rot * glm::vec3(1.0f, 0.0f, 0.0f);
+		}
+		static auto rot_x = 0.0f;
+		static auto rot_y = 0.0f;
+		static glm::vec3 camera_position = glm::vec3(0.0f, 0.0f, -7.0f);
+		static glm::quat camera_orientation = glm::vec3(0.0f, 0.0f, 0.0f);
+		auto const camera_forward = camera_orientation * glm::vec3(0.0f, 0.0f, 1.0f);
+		auto const camera_up = camera_orientation * glm::vec3(0.0f, 1.0f, 0.0f);
+		auto const camera_right = camera_orientation * glm::vec3(1.0f, 0.0f, 0.0f);
 
-			if (key[SDL_SCANCODE_LEFT])		rot_y += 0.025f;
-			if (key[SDL_SCANCODE_RIGHT])	rot_y -= 0.025f;
-			if (key[SDL_SCANCODE_UP])		rot_x -= 0.025f;
-			if (key[SDL_SCANCODE_DOWN])		rot_x += 0.025f;
+		if (key[SDL_SCANCODE_LEFT])		rot_y += 0.025f;
+		if (key[SDL_SCANCODE_RIGHT])	rot_y -= 0.025f;
+		if (key[SDL_SCANCODE_UP])		rot_x -= 0.025f;
+		if (key[SDL_SCANCODE_DOWN])		rot_x += 0.025f;
 
-			camera_rot = glm::quat(glm::vec3(rot_x, rot_y, 0.0f));
+		camera_orientation = glm::quat(glm::vec3(rot_x, rot_y, 0.0f));
 
-			if (key[SDL_SCANCODE_W]) camera_pos += cam_forward * 0.1f;
-			if (key[SDL_SCANCODE_A]) camera_pos += cam_right * 0.1f;
-			if (key[SDL_SCANCODE_S]) camera_pos -= cam_forward * 0.1f;
-			if (key[SDL_SCANCODE_D]) camera_pos -= cam_right * 0.1f;
+		if (key[SDL_SCANCODE_W]) camera_position += camera_forward * 0.1f;
+		if (key[SDL_SCANCODE_A]) camera_position += camera_right * 0.1f;
+		if (key[SDL_SCANCODE_S]) camera_position -= camera_forward * 0.1f;
+		if (key[SDL_SCANCODE_D]) camera_position -= camera_right * 0.1f;
 
-			static float cube_speed = 1.0f;
-			if (key[SDL_SCANCODE_Q]) cube_speed -= 0.01f;
-			if (key[SDL_SCANCODE_E]) cube_speed += 0.01f;
+		static float cube_speed = 1.0f;
+		if (key[SDL_SCANCODE_Q]) cube_speed -= 0.01f;
+		if (key[SDL_SCANCODE_E]) cube_speed += 0.01f;
 
-			auto const camera_view = glm::lookAt(camera_pos, camera_pos + cam_forward, cam_up);
-			set_uniform(vert_shader_g, uniform_view, camera_view);
+		auto const camera_view = glm::lookAt(camera_position, camera_position + camera_forward, camera_up);
+		set_uniform(vert_shader_g, uniform_view, camera_view);
 
-			/* g-buffer pass */
-			static auto const viewport_width = 1280;
-			static auto const viewport_height = 720;
-			glViewport(0, 0, viewport_width, viewport_height);
+		/* g-buffer pass */
+		static auto const viewport_width = screen_width;
+		static auto const viewport_height = screen_height;
+		glViewport(0, 0, viewport_width, viewport_height);
 
-			auto const depth_clear_val = 1.0f;
-			glClearNamedFramebufferfv(buffer_g, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
-			glClearNamedFramebufferfv(buffer_g, GL_COLOR, 1, glm::value_ptr(glm::vec3(0.0f)));
-			glClearNamedFramebufferfv(buffer_g, GL_COLOR, 2, glm::value_ptr(glm::vec4(0.0f)));
-			glClearNamedFramebufferfv(buffer_g, GL_DEPTH, 0, &depth_clear_val);
+		auto const depth_clear_val = 1.0f;
+		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
+		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 1, glm::value_ptr(glm::vec3(0.0f)));
+		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 2, glm::value_ptr(glm::vec4(0.0f)));
+		glClearNamedFramebufferfv(fb_gbuffer, GL_DEPTH, 0, &depth_clear_val);
 
-			glBindFramebuffer(GL_FRAMEBUFFER, buffer_g);
+		glBindFramebuffer(GL_FRAMEBUFFER, fb_gbuffer);
 
-			glBindTextureUnit(0, cub_dif);
-			glBindTextureUnit(1, cub_spc);
-			glBindTextureUnit(2, cub_nrm);
+		glBindTextureUnit(0, texture_cube_diffuse);
+		glBindTextureUnit(1, texture_cube_specular);
+		glBindTextureUnit(2, texture_cube_normal);
 
-			glBindProgramPipeline(pr_g);
-			glBindVertexArray(vao_cube);
+		glBindProgramPipeline(pr_g);
+		glBindVertexArray(vao_cube);
 
-			/* cube orbit */
-			auto const cube_position = glm::vec3(0.0f, 0.0f, 0.0f);
-			static auto cube_rot = 0.0f;
+		/* cube orbit */
+		auto const cube_position = glm::vec3(0.0f, 0.0f, 0.0f);
+		static auto cube_rotation = 0.0f;
 
-			set_uniform(vert_shader_g, uniform_modl, glm::translate(cube_position) * glm::rotate(cube_rot*cube_speed, glm::vec3(1.0f, 1.0f, 0.0f)));
+		set_uniform(vert_shader_g, uniform_modl, glm::translate(cube_position) * glm::rotate(cube_rotation*cube_speed, glm::vec3(1.0f, 1.0f, 0.0f)));
+
+		glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
+
+		for (int i = 0; i < 4; i++)
+		{
+			auto const orbit_amount = (cube_rotation * cube_speed + float(i) * 90.0f * glm::pi<float>() / 180.0f);
+			auto const orbit_pos = orbit_axis(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f)) + glm::vec3(-2.0f, 0.0f, 0.0f);
+			set_uniform(vert_shader_g, uniform_modl,
+				glm::translate(cube_position + orbit_pos) *
+				glm::rotate(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f))
+			);
 
 			glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
-
-			for (int i = 0; i < 4; i++)
-			{
-				auto const orbit_amount = (cube_rot * cube_speed + float(i) * 90.0f * glm::pi<float>() / 180.0f);
-				auto const orbit_pos = orbit_axis(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f)) + glm::vec3(-2.0f, 0.0f, 0.0f);
-				set_uniform(vert_shader_g, uniform_modl,
-					glm::translate(cube_position + orbit_pos) *
-					glm::rotate(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f))
-				);
-
-				glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
-			}
-			cube_rot += 0.1f;
-
-			glBindVertexArray(vao_quad);
-
-			set_uniform(vert_shader_g, uniform_modl, glm::translate(glm::vec3(0.0f, -3.0f, 0.0f)) * glm::scale(glm::vec3(10.0f, 1.0f, 10.0f)));
-
-			glDrawElements(GL_TRIANGLES, indices_quad.size(), GL_UNSIGNED_BYTE, nullptr);
-
-			/* actual shading pass */
-			glClearNamedFramebufferfv(final_col_fb, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
-			glClearNamedFramebufferfv(final_col_fb, GL_DEPTH, 0, &depth_clear_val);
-
-			glBindFramebuffer(GL_FRAMEBUFFER, final_col_fb);
-
-			glBindTextureUnit(0, pos_tex);
-			glBindTextureUnit(1, nrm_tex);
-			glBindTextureUnit(2, alb_tex);
-			glBindTextureUnit(3, dep_tex);
-			glBindTextureUnit(4, skybox);
-
-			glBindProgramPipeline(pr);
-			glBindVertexArray(vao_empty);
-
-			set_uniform(frag_shader, uniform_cam_pos, camera_pos);
-			set_uniform(vert_shader, uniform_cam_dir, glm::inverse(glm::mat3(camera_view)));
-			set_uniform(vert_shader, uniform_fov, fov);
-			set_uniform(vert_shader, uniform_aspect, float(viewport_width) / float(viewport_height));
-			set_uniform(vert_shader, uniform_uvs_diff, glm::vec2(
-				float(viewport_width) / float(screen_width),
-				float(viewport_height) / float(screen_height)
-			));
-
-			glDrawArrays(GL_TRIANGLES, 0, 6);
-
-			/* scale raster */
-			glViewport(0, 0, window_width, window_height);
-
-			glBindFramebuffer(GL_FRAMEBUFFER, 0);
-			glBlitNamedFramebuffer(final_col_fb, 0, 0, 0, viewport_width, viewport_height, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-			SDL_GL_SwapWindow(window);
 		}
+		cube_rotation += 0.1f;
 
-		delete_items(glDeleteBuffers, {
-			vbo_cube, ibo_cube,
-			vbo_quad, ibo_quad,
-			});
-		delete_items(glDeleteTextures, {
-			cub_dif,	cub_spc,	cub_nrm,
-			pos_tex,	alb_tex,	nrm_tex,	dep_tex,
-			col_tex,
-			skybox
-			});
-		delete_items(glDeleteProgram, {
-			vert_shader, frag_shader,
-			vert_shader_g, frag_shader_g,
-			});
+		glBindVertexArray(vao_quad);
 
-		delete_items(glDeleteProgramPipelines, { pr, pr_g });
-		delete_items(glDeleteVertexArrays, { vao_cube, vao_empty });
+		set_uniform(vert_shader_g, uniform_modl, glm::translate(glm::vec3(0.0f, -3.0f, 0.0f)) * glm::scale(glm::vec3(10.0f, 1.0f, 10.0f)));
 
-		glDeleteFramebuffers(1, &buffer_g);
-		glDeleteFramebuffers(1, &final_col_fb);
+		glDrawElements(GL_TRIANGLES, indices_quad.size(), GL_UNSIGNED_BYTE, nullptr);
 
+		/* actual shading pass */
+		glClearNamedFramebufferfv(fb_finalcolor, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
+		glClearNamedFramebufferfv(fb_finalcolor, GL_DEPTH, 0, &depth_clear_val);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, fb_finalcolor);
+
+		glBindTextureUnit(0, texture_gbuffer_position);
+		glBindTextureUnit(1, texture_gbuffer_normal);
+		glBindTextureUnit(2, texture_gbuffer_albedo);
+		glBindTextureUnit(3, texture_gbuffer_depth);
+		glBindTextureUnit(4, texture_skybox);
+
+		glBindProgramPipeline(pr);
+		glBindVertexArray(vao_empty);
+
+		set_uniform(frag_shader, uniform_cam_pos, camera_position);
+		set_uniform(vert_shader, uniform_cam_dir, glm::inverse(glm::mat3(camera_view)));
+		set_uniform(vert_shader, uniform_fov, fov);
+		set_uniform(vert_shader, uniform_aspect, float(viewport_width) / float(viewport_height));
+		set_uniform(vert_shader, uniform_uvs_diff, glm::vec2(
+			float(viewport_width) / float(screen_width),
+			float(viewport_height) / float(screen_height)
+		));
+
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
+		/* scale raster */
+		glViewport(0, 0, window_width, window_height);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		glBlitNamedFramebuffer(fb_finalcolor, 0, 0, 0, viewport_width, viewport_height, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+		SDL_GL_SwapWindow(window);
 	}
-	else throw std::runtime_error("failed to load gl");
+
+	delete_items(glDeleteBuffers,
+		{
+		vbo_cube, ibo_cube,
+		vbo_quad, ibo_quad,
+		});
+	delete_items(glDeleteTextures,
+		{
+		texture_cube_diffuse, texture_cube_specular, texture_cube_normal,
+		texture_gbuffer_position, texture_gbuffer_albedo, texture_gbuffer_normal, texture_gbuffer_depth, texture_gbuffer_color,
+		texture_skybox
+		});
+	delete_items(glDeleteProgram, {
+		vert_shader, frag_shader,
+		vert_shader_g, frag_shader_g,
+		});
+
+	delete_items(glDeleteProgramPipelines, { pr, pr_g });
+	delete_items(glDeleteVertexArrays, { vao_cube, vao_empty });
+
+	glDeleteFramebuffers(1, &fb_gbuffer);
+	glDeleteFramebuffers(1, &fb_finalcolor);
 
 	SDL_GL_DeleteContext(gl_context);
 	SDL_DestroyWindow(window);
