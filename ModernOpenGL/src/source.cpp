@@ -118,7 +118,7 @@ void validate_program(GLuint shader, std::string_view filename)
 		glDeleteShader(shader);
 
 		std::ostringstream message;
-		message << "shader " << filename << " contains error(s):\n\n" << compiler_log.data() << "\n";
+		message << "shader " << filename << " contains error(s):\n\n" << compiler_log.data() << '\n';
 		std::clog << message.str();
 	}
 }
@@ -410,43 +410,25 @@ void APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum se
 {
 	std::ostringstream str;
 	str << "---------------------opengl-callback-start------------\n";
-	str << "message: " << message << "\n";
+	str << "message: " << message << '\n';
 	str << "type: ";
 	switch (type)
 	{
-	case GL_DEBUG_TYPE_ERROR:
-		str << "ERROR";
-		break;
-	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
-		str << "DEPRECATED_BEHAVIOR";
-		break;
-	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:
-		str << "UNDEFINED_BEHAVIOR";
-		break;
-	case GL_DEBUG_TYPE_PORTABILITY:
-		str << "PORTABILITY";
-		break;
-	case GL_DEBUG_TYPE_PERFORMANCE:
-		str << "PERFORMANCE";
-		break;
-	case GL_DEBUG_TYPE_OTHER:
-		str << "OTHER";
-		break;
+	case GL_DEBUG_TYPE_ERROR: str << "ERROR"; break;
+	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: str << "DEPRECATED_BEHAVIOR"; break;
+	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: str << "UNDEFINED_BEHAVIOR";	break;
+	case GL_DEBUG_TYPE_PORTABILITY: str << "PORTABILITY"; break;
+	case GL_DEBUG_TYPE_PERFORMANCE: str << "PERFORMANCE"; break;
+	case GL_DEBUG_TYPE_OTHER: str << "OTHER"; break;
 	}
-
-	str << "\nid: " << id << "\n";
+	str << '\n';
+	str << "id: " << id << '\n';
 	str << "severity: ";
 	switch (severity)
 	{
-	case GL_DEBUG_SEVERITY_LOW:
-		str << "LOW";
-		break;
-	case GL_DEBUG_SEVERITY_MEDIUM:
-		str << "MEDIUM";
-		break;
-	case GL_DEBUG_SEVERITY_HIGH:
-		str << "HIGH";
-		break;
+	case GL_DEBUG_SEVERITY_LOW: str << "LOW"; break;
+	case GL_DEBUG_SEVERITY_MEDIUM: str << "MEDIUM";	break;
+	case GL_DEBUG_SEVERITY_HIGH: str << "HIGH";	break;
 	}
 	str << "\n---------------------opengl-callback-end--------------\n";
 
@@ -484,6 +466,7 @@ int main(int argc, char* argv[])
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
 	const auto window = SDL_CreateWindow("ModernOpenGL\0", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_width, window_height, SDL_WINDOW_OPENGL);
 	const auto gl_context = SDL_GL_CreateContext(window);
+	//SDL_GL_SetSwapInterval(0);
 	auto ev = SDL_Event();
 
 	auto key_count = 0;
@@ -495,10 +478,10 @@ int main(int argc, char* argv[])
 
 	auto const[screen_width, screen_height] = []()
 	{
-		//SDL_DisplayMode display_mode;
-		//SDL_GetCurrentDisplayMode(0, &display_mode);
-		//return std::pair<int, int>(display_mode.w, display_mode.h);
-		return std::pair<int, int>(960, 540);
+		SDL_DisplayMode display_mode;
+		SDL_GetCurrentDisplayMode(0, &display_mode);
+		return std::pair<int, int>(display_mode.w, display_mode.h);
+		//return std::pair<int, int>(320, 200);
 	}();
 
 	if (!gladLoadGL())
@@ -509,6 +492,7 @@ int main(int argc, char* argv[])
 	}
 
 	std::clog << glGetString(GL_VERSION) << '\n';
+
 #if _DEBUG
 	if (glDebugMessageCallback)
 	{
