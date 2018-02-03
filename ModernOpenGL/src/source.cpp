@@ -106,7 +106,7 @@ std::tuple<GLuint, GLuint, GLuint> create_geometry(std::vector<T> const& vertice
 	return std::make_tuple(vao, vbo, ibo);
 }
 
-void validate_shader(GLuint shader)
+void validate_program(GLuint shader, std::string_view filename)
 {
 	GLint compiled = 0;
 	glProgramParameteri(shader, GL_PROGRAM_SEPARABLE, GL_TRUE);
@@ -118,21 +118,24 @@ void validate_shader(GLuint shader)
 		glDeleteShader(shader);
 
 		std::ostringstream message;
-		message << "shader contains error(s): " << compiler_log.data() << "\n";
+		message << "shader " << filename << " contains error(s):\n\n" << compiler_log.data() << "\n";
 		std::clog << message.str();
 	}
 }
 
-std::tuple<GLuint, GLuint, GLuint> create_shader(std::string_view vert_source, std::string_view frag_source)
+std::tuple<GLuint, GLuint, GLuint> create_program(std::string_view vert_filepath, std::string_view frag_filepath)
 {
+	auto const vert_source = read_text_file(vert_filepath);
+	auto const frag_source = read_text_file(frag_filepath);
+
 	auto const v_ptr = vert_source.data();
 	auto const f_ptr = frag_source.data();
 	GLuint pipeline = 0;
 	auto vert = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &v_ptr);
 	auto frag = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &f_ptr);
 
-	validate_shader(vert);
-	validate_shader(frag);
+	validate_program(vert, vert_filepath);
+	validate_program(frag, frag_filepath);
 
 	glCreateProgramPipelines(1, &pipeline);
 	glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vert);
@@ -619,13 +622,8 @@ int main(int argc, char* argv[])
 	auto const[vao_quad, vbo_quad, ibo_quad] = create_geometry(vertices_quad, indices_quad, vertex_format);
 
 	/* shaders */
-	auto const[pr, vert_shader, frag_shader] = create_shader(
-		read_text_file(".\\shaders\\main.vert"),
-		read_text_file(".\\shaders\\main.frag"));
-
-	auto const[pr_g, vert_shader_g, frag_shader_g] = create_shader(
-		read_text_file(".\\shaders\\gbuffer.vert"),
-		read_text_file(".\\shaders\\gbuffer.frag"));
+	auto const[pr, vert_shader, frag_shader] = create_program(".\\shaders\\main.vert", ".\\shaders\\main.frag");
+	auto const[pr_g, vert_shader_g, frag_shader_g] = create_program(".\\shaders\\gbuffer.vert", ".\\shaders\\gbuffer.frag");
 
 	/* uniforms */
 	constexpr auto uniform_projection = 0;
