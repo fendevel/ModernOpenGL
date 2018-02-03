@@ -88,10 +88,9 @@ inline GLuint create_buffer(std::vector<T> const& buff, GLenum flags = GL_DYNAMI
 template<typename T>
 std::tuple<GLuint, GLuint, GLuint> create_geometry(std::vector<T> const& vertices, std::vector<uint8_t> const& indices, std::vector<attrib_format_t> const& attrib_formats)
 {
-	GLuint
-		vao = 0,
-		vbo = create_buffer(vertices),
-		ibo = create_buffer(indices);
+	GLuint vao = 0;
+	auto vbo = create_buffer(vertices);
+	auto ibo = create_buffer(indices);
 
 	glCreateVertexArrays(1, &vao);
 	glVertexArrayVertexBuffer(vao, 0, vbo, 0, sizeof(T));
@@ -107,13 +106,33 @@ std::tuple<GLuint, GLuint, GLuint> create_geometry(std::vector<T> const& vertice
 	return std::make_tuple(vao, vbo, ibo);
 }
 
+void validate_shader(GLuint shader)
+{
+	GLint compiled = 0;
+	glProgramParameteri(shader, GL_PROGRAM_SEPARABLE, GL_TRUE);
+	glGetProgramiv(shader, GL_LINK_STATUS, &compiled);
+	if (compiled == GL_FALSE)
+	{
+		std::array<char, 1024> compiler_log;
+		glGetProgramInfoLog(shader, compiler_log.size(), nullptr, compiler_log.data());
+		glDeleteShader(shader);
+
+		std::ostringstream message;
+		message << "shader contains error(s): " << compiler_log.data() << "\n";
+		std::clog << message.str();
+	}
+}
+
 std::tuple<GLuint, GLuint, GLuint> create_shader(std::string_view vert_source, std::string_view frag_source)
 {
 	auto const v_ptr = vert_source.data();
 	auto const f_ptr = frag_source.data();
 	GLuint pipeline = 0;
-	GLuint vert = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &v_ptr);
-	GLuint frag = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &f_ptr);
+	auto vert = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &v_ptr);
+	auto frag = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &f_ptr);
+
+	validate_shader(vert);
+	validate_shader(frag);
 
 	glCreateProgramPipelines(1, &pipeline);
 	glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vert);
@@ -383,11 +402,84 @@ std::vector<glm::vec3> generate_ssao_noise()
 }
 */
 
+#if _DEBUG
+void APIENTRY gl_debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam)
+{
+	std::ostringstream str;
+	str << "---------------------opengl-callback-start------------\n";
+	str << "message: " << message << "\n";
+	str << "type: ";
+	switch (type)
+	{
+	case GL_DEBUG_TYPE_ERROR:
+		str << "ERROR";
+		break;
+	case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR:
+		str << "DEPRECATED_BEHAVIOR";
+		break;
+	case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR:
+		str << "UNDEFINED_BEHAVIOR";
+		break;
+	case GL_DEBUG_TYPE_PORTABILITY:
+		str << "PORTABILITY";
+		break;
+	case GL_DEBUG_TYPE_PERFORMANCE:
+		str << "PERFORMANCE";
+		break;
+	case GL_DEBUG_TYPE_OTHER:
+		str << "OTHER";
+		break;
+	}
+
+	str << "\nid: " << id << "\n";
+	str << "severity: ";
+	switch (severity)
+	{
+	case GL_DEBUG_SEVERITY_LOW:
+		str << "LOW";
+		break;
+	case GL_DEBUG_SEVERITY_MEDIUM:
+		str << "MEDIUM";
+		break;
+	case GL_DEBUG_SEVERITY_HIGH:
+		str << "HIGH";
+		break;
+	}
+	str << "\n---------------------opengl-callback-end--------------\n";
+
+	std::clog << str.str();
+}
+#endif
+
+template<typename ... Args>
+std::string string_format(const std::string& format, Args ... args)
+{
+	const size_t size = snprintf(nullptr, 0, format.c_str(), args ...) + 1; // Extra space for '\0'
+	std::unique_ptr<char[]> buf(new char[size]);
+	snprintf(buf.get(), size, format.c_str(), args ...);
+	return std::string(buf.get(), buf.get() + size - 1); // We don't want the '\0' inside
+}
+
+void measure_frames(SDL_Window* const window, double& deltaTimeAverage, int& frameCounter, int framesToAverage)
+{
+	if (frameCounter == framesToAverage)
+	{
+		deltaTimeAverage /= framesToAverage;
+
+		auto window_title = string_format("frametime = %.3fms, fps = %.1f", 1000.0*deltaTimeAverage, 1.0 / deltaTimeAverage);
+		SDL_SetWindowTitle(window, window_title.c_str());
+
+		deltaTimeAverage = 0.0;
+		frameCounter = 0;
+	}
+}
+
 int main(int argc, char* argv[])
 {
-	constexpr auto window_width = 1280;
-	constexpr auto window_height = 720;
-	const auto window = SDL_CreateWindow("\0", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_width, window_height, SDL_WINDOW_OPENGL);
+	constexpr auto window_width = 1920;
+	constexpr auto window_height = 1080;
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
+	const auto window = SDL_CreateWindow("ModernOpenGL\0", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, window_width, window_height, SDL_WINDOW_OPENGL);
 	const auto gl_context = SDL_GL_CreateContext(window);
 	auto ev = SDL_Event();
 
@@ -403,17 +495,31 @@ int main(int argc, char* argv[])
 		//SDL_DisplayMode display_mode;
 		//SDL_GetCurrentDisplayMode(0, &display_mode);
 		//return std::pair<int, int>(display_mode.w, display_mode.h);
-		return std::pair<int, int>(320, 200);
+		return std::pair<int, int>(960, 540);
 	}();
 
-	auto const glad = gladLoadGL();
-
-	if (!glad)
+	if (!gladLoadGL())
 	{
+		SDL_GL_DeleteContext(gl_context);
+		SDL_DestroyWindow(window);
 		throw std::runtime_error("failed to load gl");
 	}
 
 	std::clog << glGetString(GL_VERSION) << '\n';
+#if _DEBUG
+	if (glDebugMessageCallback)
+	{
+		std::clog << "registered opengl debug callback\n";
+		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+		glDebugMessageCallback(gl_debug_callback, nullptr);
+		GLuint unusedIds = 0;
+		glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, &unusedIds, true);
+	}
+	else
+	{
+		std::clog << "glDebugMessageCallback not available\n";
+	}
+#endif
 
 	glEnable(GL_CULL_FACE);
 	glEnable(GL_DEPTH_TEST);
@@ -480,12 +586,12 @@ int main(int argc, char* argv[])
 	auto const texture_cube_specular = create_texture_2d_from_file(".\\textures\\T_Default_S.png", STBI_grey);
 	auto const texture_cube_normal = create_texture_2d_from_file(".\\textures\\T_Default_N.png", STBI_rgb);
 	auto const texture_skybox = create_texture_cube_from_file({
-			".\\textures\\TC_SkyRed_Xn.png",
-			".\\textures\\TC_SkyRed_Xp.png",
-			".\\textures\\TC_SkyRed_Yn.png",
-			".\\textures\\TC_SkyRed_Yp.png",
-			".\\textures\\TC_SkyRed_Zn.png",
-			".\\textures\\TC_SkyRed_Zp.png"
+			".\\textures\\TC_SkySpace_Xn.png",
+			".\\textures\\TC_SkySpace_Xp.png",
+			".\\textures\\TC_SkySpace_Yn.png",
+			".\\textures\\TC_SkySpace_Yp.png",
+			".\\textures\\TC_SkySpace_Zn.png",
+			".\\textures\\TC_SkySpace_Zp.png"
 		});
 
 	/* framebuffer textures */
@@ -522,7 +628,7 @@ int main(int argc, char* argv[])
 		read_text_file(".\\shaders\\gbuffer.frag"));
 
 	/* uniforms */
-	constexpr auto uniform_proj = 0;
+	constexpr auto uniform_projection = 0;
 	constexpr auto uniform_cam_pos = 0;
 	constexpr auto uniform_cam_dir = 0;
 	constexpr auto uniform_view = 1;
@@ -534,10 +640,25 @@ int main(int argc, char* argv[])
 
 	constexpr auto fov = glm::radians(60.0f);
 	auto const camera_projection = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
-	set_uniform(vert_shader_g, uniform_proj, camera_projection);
+	set_uniform(vert_shader_g, uniform_projection, camera_projection);
+
+	auto t1 = SDL_GetTicks() / 1000.0;
+
+	const auto framesToAverage = 10;
+	auto deltaTimeAverage = 0.0;  // first moment
+	auto frameCounter = 0;
 
 	while (ev.type != SDL_QUIT)
 	{
+		const auto t2 = SDL_GetTicks() / 1000.0;
+		const auto dt = t2 - t1;
+		t1 = t2;
+
+		deltaTimeAverage += dt;
+		frameCounter++;
+
+		measure_frames(window, deltaTimeAverage, frameCounter, framesToAverage);
+
 		if (SDL_PollEvent(&ev))
 		{
 			for (int i = 0; i < key_count; i++)
@@ -598,17 +719,17 @@ int main(int argc, char* argv[])
 		auto const cube_position = glm::vec3(0.0f, 0.0f, 0.0f);
 		static auto cube_rotation = 0.0f;
 
-		set_uniform(vert_shader_g, uniform_modl, glm::translate(cube_position) * glm::rotate(cube_rotation*cube_speed, glm::vec3(1.0f, 1.0f, 0.0f)));
+		set_uniform(vert_shader_g, uniform_modl, glm::translate(cube_position) * glm::rotate(cube_rotation*cube_speed, glm::vec3(0.0f, 1.0f, 0.0f)));
 
 		glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
 
-		for (int i = 0; i < 4; i++)
+		for (auto i = 0; i < 4; i++)
 		{
 			auto const orbit_amount = (cube_rotation * cube_speed + float(i) * 90.0f * glm::pi<float>() / 180.0f);
 			auto const orbit_pos = orbit_axis(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f)) + glm::vec3(-2.0f, 0.0f, 0.0f);
 			set_uniform(vert_shader_g, uniform_modl,
 				glm::translate(cube_position + orbit_pos) *
-				glm::rotate(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f))
+				glm::rotate(orbit_amount, glm::vec3(0.0f, -1.0f, 0.0f))
 			);
 
 			glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
