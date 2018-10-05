@@ -1,6 +1,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 
 #include <string_view>
+#include <string>
 #include <iostream>
 #include <cstdint>
 #include <fstream>
@@ -9,7 +10,9 @@
 #include <array>
 #include <random>
 #include <vector>
-#include <experimental/filesystem>
+#include <chrono>
+#include <numeric>
+#include <filesystem>
 
 #include <SDL.h>
 #include <glad\glad.h>
@@ -17,19 +20,16 @@
 #include <glm\glm.hpp>
 #include <glm\gtc\type_ptr.hpp>
 #include <glm\gtx\transform.hpp>
-#include <glm\gtc\matrix_transform.hpp>
-
-namespace fs = std::experimental::filesystem;
 
 extern "C" { _declspec(dllexport) unsigned int NvOptimusEnablement = 0x00000001; }
 
 inline std::string read_text_file(std::string_view filepath)
 {
-	if (!fs::exists(filepath.data()))
+	if (!std::filesystem::exists(filepath.data()))
 	{
 		std::ostringstream message;
 		message << "file " << filepath.data() << " does not exist.";
-		throw fs::filesystem_error(message.str());
+		throw std::filesystem::filesystem_error(message.str(), std::make_error_code(std::errc::no_such_file_or_directory));
 	}
 	std::ifstream file(filepath.data());
 	return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
@@ -195,7 +195,7 @@ using stb_comp_t = decltype(STBI_default);
 GLuint create_texture_2d_from_file(std::string_view filepath, stb_comp_t comp = STBI_rgb_alpha)
 {
 	int x, y, c;
-	if (!fs::exists(filepath.data()))
+	if (!std::filesystem::exists(filepath.data()))
 	{
 		std::ostringstream message;
 		message << "file " << filepath.data() << " does not exist.";
@@ -451,12 +451,36 @@ void measure_frames(SDL_Window* const window, double& deltaTimeAverage, int& fra
 	{
 		deltaTimeAverage /= framesToAverage;
 
-		auto window_title = string_format("frametime = %.3fms, fps = %.1f", 1000.0*deltaTimeAverage, 1.0 / deltaTimeAverage);
+		auto window_title = string_format("frametime = %.3fms, fps = %.1f", 1000.0*deltaTimeAverage, 1.0/ deltaTimeAverage);
 		SDL_SetWindowTitle(window, window_title.c_str());
 
 		deltaTimeAverage = 0.0;
 		frameCounter = 0;
 	}
+}
+
+enum struct shape_t
+{
+	cube = 0,
+	quad = 1
+};
+
+struct scene_object_t
+{
+	glm::mat4 model;
+	glm::mat4 mvp_inv_prev;
+	shape_t shape;
+	bool except;
+	scene_object_t(shape_t shape = shape_t::cube, bool except = false) : model(), mvp_inv_prev(), shape(shape), except(except)
+	{
+
+	}
+};
+
+template<typename T = std::chrono::milliseconds>
+int64_t now()
+{
+	return std::chrono::duration_cast<T>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 
 int main(int argc, char* argv[])
@@ -481,7 +505,6 @@ int main(int argc, char* argv[])
 		SDL_DisplayMode display_mode;
 		SDL_GetCurrentDisplayMode(0, &display_mode);
 		return std::pair<int, int>(display_mode.w, display_mode.h);
-		//return std::pair<int, int>(320, 200);
 	}();
 
 	if (!gladLoadGL())
@@ -587,9 +610,13 @@ int main(int argc, char* argv[])
 	auto const texture_gbuffer_normal = create_texture_2d(GL_RGB16F, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
 	auto const texture_gbuffer_albedo = create_texture_2d(GL_RGBA16F, GL_RGBA, screen_width, screen_height, nullptr, GL_NEAREST);
 	auto const texture_gbuffer_depth = create_texture_2d(GL_DEPTH_COMPONENT32, GL_DEPTH, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_gbuffer_velocity = create_texture_2d(GL_RG16F, GL_RG, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_motion_blur = create_texture_2d(GL_RGB8, GL_RGB, screen_width, screen_height, nullptr, GL_NEAREST);
+	auto const texture_motion_blur_mask = create_texture_2d(GL_R8, GL_RED, screen_width, screen_height, nullptr, GL_NEAREST);
 
-	auto const fb_gbuffer = create_framebuffer({ texture_gbuffer_position, texture_gbuffer_normal, texture_gbuffer_albedo }, texture_gbuffer_depth);
+	auto const fb_gbuffer = create_framebuffer({ texture_gbuffer_position, texture_gbuffer_normal, texture_gbuffer_albedo, texture_gbuffer_velocity }, texture_gbuffer_depth);
 	auto const fb_finalcolor = create_framebuffer({ texture_gbuffer_color });
+	auto const fb_blur = create_framebuffer({ texture_motion_blur });
 
 	/* vertex formatting information */
 	auto const vertex_format =
@@ -608,6 +635,7 @@ int main(int argc, char* argv[])
 	/* shaders */
 	auto const[pr, vert_shader, frag_shader] = create_program(".\\shaders\\main.vert", ".\\shaders\\main.frag");
 	auto const[pr_g, vert_shader_g, frag_shader_g] = create_program(".\\shaders\\gbuffer.vert", ".\\shaders\\gbuffer.frag");
+	auto const[pr_blur, vert_shader_blur, frag_shader_blur] = create_program(".\\shaders\\blur.vert", ".\\shaders\\blur.frag");
 
 	/* uniforms */
 	constexpr auto uniform_projection = 0;
@@ -618,7 +646,11 @@ int main(int argc, char* argv[])
 	constexpr auto uniform_aspect = 2;
 	constexpr auto uniform_modl = 2;
 	constexpr auto uniform_lght = 3;
+	constexpr auto uniform_blur_bias = 0;
 	constexpr auto uniform_uvs_diff = 3;
+	constexpr auto uniform_mvp = 3;
+	constexpr auto uniform_mvp_inverse = 4;
+	constexpr auto uniform_blur_except = 5;
 
 	constexpr auto fov = glm::radians(60.0f);
 	auto const camera_projection = glm::perspective(fov, float(window_width) / float(window_height), 0.1f, 1000.0f);
@@ -630,6 +662,17 @@ int main(int argc, char* argv[])
 	auto deltaTimeAverage = 0.0;  // first moment
 	auto frameCounter = 0;
 
+	std::vector<scene_object_t> objects = {
+		scene_object_t(shape_t::cube),
+		scene_object_t(shape_t::cube),
+		scene_object_t(shape_t::cube),
+		scene_object_t(shape_t::cube),
+		scene_object_t(shape_t::cube),
+		scene_object_t(shape_t::quad)
+	};
+
+	auto curr_time = now();
+	auto frames = int64_t(0);
 	while (ev.type != SDL_QUIT)
 	{
 		const auto t2 = SDL_GetTicks() / 1000.0;
@@ -658,6 +701,9 @@ int main(int argc, char* argv[])
 		auto const camera_up = camera_orientation * glm::vec3(0.0f, 1.0f, 0.0f);
 		auto const camera_right = camera_orientation * glm::vec3(1.0f, 0.0f, 0.0f);
 
+		if (key[SDL_SCANCODE_ESCAPE])
+			ev.type = SDL_QUIT;
+
 		if (key[SDL_SCANCODE_LEFT])		rot_y += 0.025f;
 		if (key[SDL_SCANCODE_RIGHT])	rot_y -= 0.025f;
 		if (key[SDL_SCANCODE_UP])		rot_x -= 0.025f;
@@ -675,6 +721,23 @@ int main(int argc, char* argv[])
 		if (key[SDL_SCANCODE_E]) cube_speed += 0.01f;
 
 		auto const camera_view = glm::lookAt(camera_position, camera_position + camera_forward, camera_up);
+		
+		/* cube orbit */
+		auto const orbit_center = glm::vec3(0.0f, 0.0f, 0.0f);
+		static auto orbit_progression = 0.0f;
+
+		objects[0].model = glm::translate(orbit_center) * glm::rotate(orbit_progression*cube_speed, glm::vec3(0.0f, 1.0f, 0.0f));
+
+		for (auto i = 0; i < 4; i++)
+		{
+			auto const orbit_amount = (orbit_progression * cube_speed + float(i) * 90.0f * glm::pi<float>() / 180.0f);
+			auto const orbit_pos = orbit_axis(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f)) + glm::vec3(-2.0f, 0.0f, 0.0f);
+			objects[1 + i].model = glm::translate(orbit_center + orbit_pos) * glm::rotate(orbit_amount, glm::vec3(0.0f, -1.0f, 0.0f));
+		}
+		orbit_progression += 0.1f;
+
+		objects[5].model = glm::translate(glm::vec3(0.0f, -3.0f, 0.0f)) * glm::scale(glm::vec3(10.0f, 1.0f, 10.0f));
+
 		set_uniform(vert_shader_g, uniform_view, camera_view);
 
 		/* g-buffer pass */
@@ -686,6 +749,7 @@ int main(int argc, char* argv[])
 		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
 		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 1, glm::value_ptr(glm::vec3(0.0f)));
 		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 2, glm::value_ptr(glm::vec4(0.0f)));
+		glClearNamedFramebufferfv(fb_gbuffer, GL_COLOR, 3, glm::value_ptr(glm::vec2(0.0f)));
 		glClearNamedFramebufferfv(fb_gbuffer, GL_DEPTH, 0, &depth_clear_val);
 
 		glBindFramebuffer(GL_FRAMEBUFFER, fb_gbuffer);
@@ -695,34 +759,33 @@ int main(int argc, char* argv[])
 		glBindTextureUnit(2, texture_cube_normal);
 
 		glBindProgramPipeline(pr_g);
-		glBindVertexArray(vao_cube);
 
-		/* cube orbit */
-		auto const cube_position = glm::vec3(0.0f, 0.0f, 0.0f);
-		static auto cube_rotation = 0.0f;
-
-		set_uniform(vert_shader_g, uniform_modl, glm::translate(cube_position) * glm::rotate(cube_rotation*cube_speed, glm::vec3(0.0f, 1.0f, 0.0f)));
-
-		glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
-
-		for (auto i = 0; i < 4; i++)
+		for (auto& object : objects)
 		{
-			auto const orbit_amount = (cube_rotation * cube_speed + float(i) * 90.0f * glm::pi<float>() / 180.0f);
-			auto const orbit_pos = orbit_axis(orbit_amount, glm::vec3(-1.0f, -1.0f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f)) + glm::vec3(-2.0f, 0.0f, 0.0f);
-			set_uniform(vert_shader_g, uniform_modl,
-				glm::translate(cube_position + orbit_pos) *
-				glm::rotate(orbit_amount, glm::vec3(0.0f, -1.0f, 0.0f))
-			);
+			switch (object.shape)
+			{
+			case shape_t::cube: glBindVertexArray(vao_cube); break;
+			case shape_t::quad: glBindVertexArray(vao_quad); break;
+			}
 
-			glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr);
+			auto const curr_mvp_inv = camera_projection * camera_view * object.model;
+
+			set_uniform(vert_shader_g, uniform_modl, object.model);
+			set_uniform(vert_shader_g, uniform_mvp, curr_mvp_inv);
+			set_uniform(vert_shader_g, uniform_mvp_inverse, object.mvp_inv_prev);
+			set_uniform(vert_shader_g, uniform_blur_except, object.except);
+
+			object.mvp_inv_prev = curr_mvp_inv;
+
+			for (auto const& object : objects)
+			{
+				switch (object.shape)
+				{
+				case shape_t::cube: glDrawElements(GL_TRIANGLES, indices_cube.size(), GL_UNSIGNED_BYTE, nullptr); break;
+				case shape_t::quad: glDrawElements(GL_TRIANGLES, indices_quad.size(), GL_UNSIGNED_BYTE, nullptr); break;
+				}
+			}
 		}
-		cube_rotation += 0.1f;
-
-		glBindVertexArray(vao_quad);
-
-		set_uniform(vert_shader_g, uniform_modl, glm::translate(glm::vec3(0.0f, -3.0f, 0.0f)) * glm::scale(glm::vec3(10.0f, 1.0f, 10.0f)));
-
-		glDrawElements(GL_TRIANGLES, indices_quad.size(), GL_UNSIGNED_BYTE, nullptr);
 
 		/* actual shading pass */
 		glClearNamedFramebufferfv(fb_finalcolor, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
@@ -750,36 +813,71 @@ int main(int argc, char* argv[])
 
 		glDrawArrays(GL_TRIANGLES, 0, 6);
 
+		/* motion blur */
+
+		glClearNamedFramebufferfv(fb_blur, GL_COLOR, 0, glm::value_ptr(glm::vec3(0.0f)));
+		
+		glBindFramebuffer(GL_FRAMEBUFFER, fb_blur);
+
+		glBindTextureUnit(0, texture_gbuffer_color);
+		glBindTextureUnit(1, texture_gbuffer_velocity);
+		
+		glBindProgramPipeline(pr_blur);
+		glBindVertexArray(vao_empty);
+
+		set_uniform(frag_shader_blur, uniform_blur_bias, 2.0f/*float(fps_sum) / float(60)*/);
+		set_uniform(vert_shader_blur, uniform_uvs_diff, glm::vec2(
+			float(viewport_width) / float(screen_width),
+			float(viewport_height) / float(screen_height)
+		));
+
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
 		/* scale raster */
 		glViewport(0, 0, window_width, window_height);
 
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glBlitNamedFramebuffer(fb_finalcolor, 0, 0, 0, viewport_width, viewport_height, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+		glBlitNamedFramebuffer(fb_blur, 0, 0, 0, viewport_width, viewport_height, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
 		SDL_GL_SwapWindow(window);
 	}
 
 	delete_items(glDeleteBuffers,
 		{
-		vbo_cube, ibo_cube,
-		vbo_quad, ibo_quad,
+		vbo_cube, 
+		ibo_cube,
+		
+		vbo_quad, 
+		ibo_quad,
 		});
 	delete_items(glDeleteTextures,
 		{
-		texture_cube_diffuse, texture_cube_specular, texture_cube_normal,
-		texture_gbuffer_position, texture_gbuffer_albedo, texture_gbuffer_normal, texture_gbuffer_depth, texture_gbuffer_color,
-		texture_skybox
+		texture_cube_diffuse, 
+		texture_cube_specular, 
+		texture_cube_normal,
+		
+		texture_gbuffer_position, 
+		texture_gbuffer_albedo, 
+		texture_gbuffer_normal, 
+		texture_gbuffer_depth, 
+		texture_gbuffer_color,
+		
+		texture_skybox,
+		
+		texture_motion_blur, 
+		texture_motion_blur_mask
 		});
 	delete_items(glDeleteProgram, {
-		vert_shader, frag_shader,
-		vert_shader_g, frag_shader_g,
+		vert_shader, 
+		frag_shader,
+		
+		vert_shader_g, 
+		frag_shader_g,
 		});
 
 	delete_items(glDeleteProgramPipelines, { pr, pr_g });
 	delete_items(glDeleteVertexArrays, { vao_cube, vao_empty });
-
-	glDeleteFramebuffers(1, &fb_gbuffer);
-	glDeleteFramebuffers(1, &fb_finalcolor);
+	delete_items(glDeleteFramebuffers, { fb_gbuffer, fb_finalcolor, fb_blur });
 
 	SDL_GL_DeleteContext(gl_context);
 	SDL_DestroyWindow(window);
