@@ -12,16 +12,26 @@
 #include <vector>
 #include <chrono>
 #include <numeric>
+#ifdef __GNUC__
+#include <experimental/filesystem>
+#else
 #include <filesystem>
+#endif
 
 #include <SDL.h>
-#include <glad\glad.h>
+#include <glad/glad.h>
 #include <stb_image.h>
-#include <glm\glm.hpp>
-#include <glm\gtc\type_ptr.hpp>
-#include <glm\gtx\transform.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/transform.hpp>
 
+#ifdef _MSC_VER
 extern "C" { _declspec(dllexport) unsigned int NvOptimusEnablement = 0x00000001; }
+#endif
+
+#ifdef __GNUC__
+namespace std { namespace filesystem = experimental::filesystem; }
+#endif
 
 inline std::string read_text_file(std::string_view filepath)
 {
@@ -81,7 +91,7 @@ inline GLuint create_buffer(std::vector<T> const& buff, GLenum flags = GL_DYNAMI
 {
 	GLuint name = 0;
 	glCreateBuffers(1, &name);
-	glNamedBufferStorage(name, sizeof(std::vector<T>::value_type) * buff.size(), buff.data(), flags);
+	glNamedBufferStorage(name, sizeof(typename std::vector<T>::value_type) * buff.size(), buff.data(), flags);
 	return name;
 }
 
@@ -592,16 +602,16 @@ int main(int argc, char* argv[])
 		0,   1,  2,  2,  3,  0,
 	};
 
-	auto const texture_cube_diffuse = create_texture_2d_from_file(".\\textures\\T_Default_D.png", STBI_rgb);
-	auto const texture_cube_specular = create_texture_2d_from_file(".\\textures\\T_Default_S.png", STBI_grey);
-	auto const texture_cube_normal = create_texture_2d_from_file(".\\textures\\T_Default_N.png", STBI_rgb);
+	auto const texture_cube_diffuse = create_texture_2d_from_file("./textures/T_Default_D.png", STBI_rgb);
+	auto const texture_cube_specular = create_texture_2d_from_file("./textures/T_Default_S.png", STBI_grey);
+	auto const texture_cube_normal = create_texture_2d_from_file("./textures/T_Default_N.png", STBI_rgb);
 	auto const texture_skybox = create_texture_cube_from_file({
-			".\\textures\\TC_SkySpace_Xn.png",
-			".\\textures\\TC_SkySpace_Xp.png",
-			".\\textures\\TC_SkySpace_Yn.png",
-			".\\textures\\TC_SkySpace_Yp.png",
-			".\\textures\\TC_SkySpace_Zn.png",
-			".\\textures\\TC_SkySpace_Zp.png"
+			"./textures/TC_SkySpace_Xn.png",
+			"./textures/TC_SkySpace_Xp.png",
+			"./textures/TC_SkySpace_Yn.png",
+			"./textures/TC_SkySpace_Yp.png",
+			"./textures/TC_SkySpace_Zn.png",
+			"./textures/TC_SkySpace_Zp.png"
 		});
 
 	/* framebuffer textures */
@@ -619,7 +629,7 @@ int main(int argc, char* argv[])
 	auto const fb_blur = create_framebuffer({ texture_motion_blur });
 
 	/* vertex formatting information */
-	auto const vertex_format =
+	std::vector<attrib_format_t> const vertex_format =
 	{
 		create_attrib_format<glm::vec3>(0, offsetof(vertex_t, position)),
 		create_attrib_format<glm::vec3>(1, offsetof(vertex_t, color)),
@@ -633,9 +643,9 @@ int main(int argc, char* argv[])
 	auto const[vao_quad, vbo_quad, ibo_quad] = create_geometry(vertices_quad, indices_quad, vertex_format);
 
 	/* shaders */
-	auto const[pr, vert_shader, frag_shader] = create_program(".\\shaders\\main.vert", ".\\shaders\\main.frag");
-	auto const[pr_g, vert_shader_g, frag_shader_g] = create_program(".\\shaders\\gbuffer.vert", ".\\shaders\\gbuffer.frag");
-	auto const[pr_blur, vert_shader_blur, frag_shader_blur] = create_program(".\\shaders\\blur.vert", ".\\shaders\\blur.frag");
+	auto const[pr, vert_shader, frag_shader] = create_program("./shaders/main.vert", "./shaders/main.frag");
+	auto const[pr_g, vert_shader_g, frag_shader_g] = create_program("./shaders/gbuffer.vert", "./shaders/gbuffer.frag");
+	auto const[pr_blur, vert_shader_blur, frag_shader_blur] = create_program("./shaders/blur.vert", "./shaders/blur.frag");
 
 	/* uniforms */
 	constexpr auto uniform_projection = 0;
