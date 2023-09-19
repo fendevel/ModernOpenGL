@@ -7,7 +7,7 @@
 #include <stb_image.h>
 #include <glad/glad.h>
 
-using stb_comp_t = decltype(STBI_default);
+using stb_comp_t = int;
 GLuint create_texture_2d_from_file(std::string_view filepath, stb_comp_t comp = STBI_rgb_alpha, bool generateMipMaps = false);
 
 GLuint create_texture_2d(GLenum internal_format, GLenum format, GLsizei width, GLsizei height, void* data = nullptr, GLenum filter = GL_LINEAR, GLenum repeat = GL_REPEAT, bool generateMipMaps = false);

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <string_view>
+#include <memory>
 
 #include <glm/glm.hpp>
 

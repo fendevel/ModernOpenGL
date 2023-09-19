@@ -2,6 +2,7 @@
 
 #include <tuple>
 #include <vector>
+#include <stdexcept>
 
 #include <glad/glad.h>
 #include <glm/glm.hpp>

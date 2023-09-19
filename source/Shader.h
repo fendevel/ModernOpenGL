@@ -2,7 +2,11 @@
 
 #include <string_view>
 #include <tuple>
+#include <stdexcept>
+
 #include <glad/glad.h>
+#include <glm/glm.hpp>
+#include <glm/ext.hpp>
 
 void validate_program(GLuint shader);
 
