@@ -12,11 +12,9 @@ if (MSVC)
 	set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} /ignore:4099")
 endif()
 
-find_package(catch2 REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(glad REQUIRED)
 find_package(stb REQUIRED)
-find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(fmtlog REQUIRED)
 find_package(SDL2 REQUIRED)
@@ -44,7 +42,6 @@ target_link_libraries(${PROJECT_NAME}
     PUBLIC stb::stb
     PUBLIC fmtlog::fmtlog
     PUBLIC glm::glm
-    PUBLIC glfw
     PUBLIC SDL2::SDL2
 )
 
